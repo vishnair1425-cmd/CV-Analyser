@@ -3,9 +3,9 @@ Cyclic Voltammetry (CV) Charge Integration App
 ================================================
 Upload an Excel file containing CV data with multiple scans. The app:
   - Plots the combined CV (Potential vs WE(1).Current (A)) coloured by scan.
-  - Shows each scan as a separate interactive plot whose linear baseline is
-    defined by TWO DRAGGABLE ENDPOINTS. Drag either endpoint on the plot and the
-    baseline, shaded areas, and integrated charges update live in the browser.
+  - Shows each scan as a separate interactive plot. Draw the linear baseline
+    freehand with the mouse (press & drag), or drag either endpoint. Baseline,
+    shaded areas, and integrated charges update live in the browser.
   - Integrates charge separately for the region above the baseline (positive)
     and below it (negative), per scan.
   - Builds peak current / peak voltage tables for the positive and negative
@@ -88,14 +88,15 @@ def trapz_signed(potential, current, baseline):
 
 
 # ----------------------------------------------------------------------------
-# Draggable-baseline component (HTML + Plotly.js)
+# Draw/drag-baseline component (HTML + Plotly.js)
 # ----------------------------------------------------------------------------
 
 def draggable_cv_component(potential, current, color, x_title, y_title,
                            default_x1, default_y1, default_x2, default_y2,
                            scan_rate, key_height=440):
-    """Render a Plotly chart with two draggable endpoint markers defining a
-    linear baseline. Integration happens live in the browser as you drag."""
+    """Render a Plotly chart whose linear baseline can be drawn freehand with
+    the mouse (press & drag) or adjusted by dragging either endpoint.
+    Integration happens live in the browser."""
     P = [float(v) for v in potential]
     I = [float(v) for v in current]
 
@@ -118,6 +119,11 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
     })
 
     html = """
+<div id="toolbar">
+  <button id="btnDraw" class="tbtn">\u270F\uFE0F Draw baseline</button>
+  <button id="btnReset" class="tbtn">\u21BA Reset</button>
+  <span class="hint">Tip: click "Draw baseline", then press &amp; drag on the plot. Or drag either red endpoint directly.</span>
+</div>
 <div id="root"></div>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <script>
@@ -181,6 +187,9 @@ const layout = {
   dragmode:false
 };
 
+const DEF1 = {x: D.x1, y: D.y1};   // default baseline endpoints (for reset)
+const DEF2 = {x: D.x2, y: D.y2};
+
 const gd = document.getElementById("root");
 Plotly.newPlot(gd, buildData(), layout,
   {displayModeBar:true, responsive:true,
@@ -198,7 +207,6 @@ function refresh(){
     '  &middot;  |Total|: '+fmt(Math.abs(r.pos)+Math.abs(r.neg))+' '+unit+'</span>';
 }
 
-let dragging = null;
 function pixelToData(e){
   const bb = gd.getBoundingClientRect();
   const xa = gd._fullLayout.xaxis, ya = gd._fullLayout.yaxis;
@@ -218,32 +226,82 @@ function nearestWithin(e, tol){
   const which = d1 <= d2 ? 1 : 2;
   return (Math.min(d1,d2) < tol) ? which : null;
 }
-gd.addEventListener("mousedown", e => {
-  const which = nearestWithin(e, 25);
-  if(which){ dragging = which; e.preventDefault(); }
-});
-window.addEventListener("mousemove", e => {
-  if(!dragging) return;
-  const d = pixelToData(e);
-  if(dragging===1){ A1 = d; } else { A2 = d; }
+
+// --- interaction state ---
+let drawMode = false;   // when true, mouse draws a fresh baseline
+let dragging = null;    // 1 or 2 = adjusting an existing endpoint
+let drawingNew = false; // mid-draw in draw mode
+
+const btnDraw  = document.getElementById("btnDraw");
+const btnReset = document.getElementById("btnReset");
+
+function setDrawMode(on){
+  drawMode = on;
+  btnDraw.classList.toggle("active", on);
+  btnDraw.textContent = on ? "\u270F\uFE0F Drawing… (click & drag)" : "\u270F\uFE0F Draw baseline";
+  gd.style.cursor = on ? "crosshair" : "default";
+}
+btnDraw.addEventListener("click", () => setDrawMode(!drawMode));
+btnReset.addEventListener("click", () => {
+  A1 = {x: DEF1.x, y: DEF1.y};
+  A2 = {x: DEF2.x, y: DEF2.y};
+  setDrawMode(false);
   refresh();
 });
-window.addEventListener("mouseup", () => { dragging = null; });
+
+gd.addEventListener("mousedown", e => {
+  if(drawMode){
+    // start a fresh baseline: both ends at the press point
+    const d = pixelToData(e);
+    A1 = {x: d.x, y: d.y};
+    A2 = {x: d.x, y: d.y};
+    drawingNew = true;
+    e.preventDefault();
+    refresh();
+  } else {
+    // adjust an existing endpoint if the press is near one
+    const which = nearestWithin(e, 25);
+    if(which){ dragging = which; e.preventDefault(); }
+  }
+});
+window.addEventListener("mousemove", e => {
+  if(drawingNew){
+    A2 = pixelToData(e);     // second end follows the cursor
+    refresh();
+  } else if(dragging){
+    const d = pixelToData(e);
+    if(dragging===1){ A1 = d; } else { A2 = d; }
+    refresh();
+  }
+});
+window.addEventListener("mouseup", () => {
+  if(drawingNew){
+    drawingNew = false;
+    setDrawMode(false);   // one draw per click of the button
+  }
+  dragging = null;
+});
 
 refresh();
 </script>
 <style>
+  #toolbar{font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin-bottom:6px;
+           display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .tbtn{font-size:14px; padding:6px 12px; border:1px solid #c7c7c7; border-radius:6px;
+        background:#f6f6f6; cursor:pointer;}
+  .tbtn:hover{background:#ececec;}
+  .tbtn.active{background:#1f77b4; color:#fff; border-color:#1f77b4;}
+  #toolbar .hint{font-size:12px; color:#888;}
   #out{font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin-top:10px;
        display:flex; gap:18px; flex-wrap:wrap; font-size:15px;}
   #out .pos{color:#1f77b4; font-weight:600;}
   #out .neg{color:#d62728; font-weight:600;}
   #out .net{color:#444;}
-  #root{cursor:crosshair;}
 </style>
 <div id="out"></div>
 """
     html = html.replace("__PAYLOAD__", payload).replace("__HEIGHT__", str(key_height))
-    components.html(html, height=key_height + 90, scrolling=False)
+    components.html(html, height=key_height + 130, scrolling=False)
 
 
 # ----------------------------------------------------------------------------
@@ -252,7 +310,7 @@ refresh();
 
 st.title("Cyclic Voltammetry — Charge Integration")
 st.caption(
-    "Upload CV data, drag the two baseline endpoints on each scan, and read off "
+    "Upload CV data, draw or drag the baseline on each scan, and read off "
     "the positive / negative integrated charge live."
 )
 
@@ -362,14 +420,15 @@ with c2:
     st.dataframe(pd.DataFrame(neg_rows), use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------------------------------
-# Per-scan plots with DRAGGABLE baseline endpoints
+# Per-scan plots with DRAW/DRAG baseline
 # ----------------------------------------------------------------------------
 
-st.subheader("Per-scan integration — drag the red endpoints")
+st.subheader("Per-scan integration — draw or drag the baseline")
 st.caption(
-    "Default baseline is the straight line between each scan's curve endpoints. "
-    "Grab a red marker and drag to redefine the baseline; positive / negative "
-    "charge update live underneath."
+    "Default baseline is the straight line between each scan's extreme-potential "
+    "vertices. Click **Draw baseline** then press-and-drag on the plot to draw a "
+    "new baseline with your mouse, or drag either red endpoint to fine-tune. "
+    "Positive / negative charge update live underneath."
 )
 
 summary_rows = []
@@ -423,7 +482,7 @@ if summary_rows:
     st.subheader("Charge summary — all scans (default baseline)")
     st.caption(
         "Computed with the default endpoint baseline. The live values above each "
-        "plot reflect any dragging you do in-browser."
+        "plot reflect any drawing/dragging you do in-browser."
     )
     summary = pd.DataFrame(summary_rows)
     st.dataframe(summary, use_container_width=True, hide_index=True)
