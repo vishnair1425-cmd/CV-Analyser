@@ -3,9 +3,10 @@ Cyclic Voltammetry (CV) Charge Integration App
 ================================================
 Upload an Excel file containing CV data with multiple scans. The app:
   - Plots the combined CV (Potential vs WE(1).Current (A)) coloured by scan.
-  - Shows each scan as a separate interactive plot. Draw the linear baseline
-    freehand with the mouse (press & drag), or drag either endpoint. Baseline,
-    shaded areas, and integrated charges update live in the browser.
+  - Shows each scan as a separate interactive plot. The default baseline is
+    horizontal at Y = 0; draw a new baseline freehand with the mouse
+    (press & drag) or drag either endpoint. Baseline, shaded areas, and
+    integrated charges update live in the browser.
   - Integrates charge separately for the region above the baseline (positive)
     and below it (negative), per scan.
   - Builds peak current / peak voltage tables for the positive and negative
@@ -104,6 +105,8 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
     # scaled correctly and dragging an anchor never distorts the view.
     pmin, pmax = min(P), max(P)
     imin, imax = min(I), max(I)
+    imin = min(imin, 0.0)   # ensure Y=0 baseline is always within view
+    imax = max(imax, 0.0)
     px_pad = (pmax - pmin) * 0.05 or 0.01
     iy_pad = (imax - imin) * 0.10 or abs(imax) * 0.1 or 1e-9
     x_range = [pmin - px_pad, pmax + px_pad]
@@ -181,7 +184,7 @@ const layout = {
   height: __HEIGHT__,
   margin:{l:70, r:20, t:10, b:50},
   xaxis:{title:{text:D.xTitle}, zeroline:false, range:D.xRange.slice(), autorange:false},
-  yaxis:{title:{text:D.yTitle}, zeroline:false, range:D.yRange.slice(), autorange:false},
+  yaxis:{title:{text:D.yTitle}, zeroline:true, range:D.yRange.slice(), autorange:false},
   template:"plotly_white",
   legend:{orientation:"h", yanchor:"bottom", y:1.02, xanchor:"right", x:1},
   dragmode:false
@@ -425,10 +428,10 @@ with c2:
 
 st.subheader("Per-scan integration — draw or drag the baseline")
 st.caption(
-    "Default baseline is the straight line between each scan's extreme-potential "
-    "vertices. Click **Draw baseline** then press-and-drag on the plot to draw a "
+    "Default baseline is horizontal at Y = 0 (the current axis). "
+    "Click **Draw baseline** then press-and-drag on the plot to draw a "
     "new baseline with your mouse, or drag either red endpoint to fine-tune. "
-    "Positive / negative charge update live underneath."
+    "**Reset** returns to Y = 0. Positive / negative charge update live underneath."
 )
 
 summary_rows = []
@@ -437,15 +440,12 @@ for s in scans:
     if len(sub) < 2:
         continue
 
-    # Baseline connects the two EXTREME-POTENTIAL points of the loop:
-    # the lowest-potential vertex and the highest-potential vertex
-    # (matching the standard CV endpoint baseline).
-    i_lo = sub["potential"].idxmin()
-    i_hi = sub["potential"].idxmax()
-    x1 = float(sub["potential"].iloc[i_lo])
-    y1 = float(sub["current"].iloc[i_lo])
-    x2 = float(sub["potential"].iloc[i_hi])
-    y2 = float(sub["current"].iloc[i_hi])
+    # Default baseline is horizontal at Y = 0 (the current axis), spanning the
+    # full potential range. Drag an endpoint or use "Draw baseline" to change it.
+    x1 = float(sub["potential"].min())
+    y1 = 0.0
+    x2 = float(sub["potential"].max())
+    y2 = 0.0
 
     with st.expander(f"Scan {s}", expanded=(s == scans[0])):
         st.markdown(f"#### Scan {s}")
@@ -481,7 +481,7 @@ for s in scans:
 if summary_rows:
     st.subheader("Charge summary — all scans (default baseline)")
     st.caption(
-        "Computed with the default endpoint baseline. The live values above each "
+        "Computed with the default Y = 0 baseline. The live values above each "
         "plot reflect any drawing/dragging you do in-browser."
     )
     summary = pd.DataFrame(summary_rows)
