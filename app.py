@@ -99,12 +99,22 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
     P = [float(v) for v in potential]
     I = [float(v) for v in current]
 
+    # Fixed axis ranges from the data extent (with padding) so the plot is
+    # scaled correctly and dragging an anchor never distorts the view.
+    pmin, pmax = min(P), max(P)
+    imin, imax = min(I), max(I)
+    px_pad = (pmax - pmin) * 0.05 or 0.01
+    iy_pad = (imax - imin) * 0.10 or abs(imax) * 0.1 or 1e-9
+    x_range = [pmin - px_pad, pmax + px_pad]
+    y_range = [imin - iy_pad, imax + iy_pad]
+
     payload = json.dumps({
         "P": P, "I": I, "color": color,
         "xTitle": x_title, "yTitle": y_title,
         "x1": default_x1, "y1": default_y1,
         "x2": default_x2, "y2": default_y2,
         "scanRate": scan_rate,
+        "xRange": x_range, "yRange": y_range,
     })
 
     html = """
@@ -164,8 +174,8 @@ function buildData(){
 const layout = {
   height: __HEIGHT__,
   margin:{l:70, r:20, t:10, b:50},
-  xaxis:{title:{text:D.xTitle}, zeroline:false},
-  yaxis:{title:{text:D.yTitle}, zeroline:false},
+  xaxis:{title:{text:D.xTitle}, zeroline:false, range:D.xRange.slice(), autorange:false},
+  yaxis:{title:{text:D.yTitle}, zeroline:false, range:D.yRange.slice(), autorange:false},
   template:"plotly_white",
   legend:{orientation:"h", yanchor:"bottom", y:1.02, xanchor:"right", x:1},
   dragmode:false
@@ -177,7 +187,9 @@ Plotly.newPlot(gd, buildData(), layout,
    modeBarButtonsToRemove:["lasso2d","select2d"]});
 
 function refresh(){
-  Plotly.react(gd, buildData(), layout);
+  // Update only the traces; keep the current axis view (initial fixed range,
+  // or whatever the user has zoomed/panned to) instead of re-applying layout.
+  Plotly.react(gd, buildData(), gd.layout || layout);
   const r = integrate();
   document.getElementById("out").innerHTML =
     '<span class="pos">Positive charge: '+fmt(r.pos)+' '+unit+'</span>'+
@@ -366,10 +378,15 @@ for s in scans:
     if len(sub) < 2:
         continue
 
-    x1 = float(sub["potential"].iloc[0])
-    y1 = float(sub["current"].iloc[0])
-    x2 = float(sub["potential"].iloc[-1])
-    y2 = float(sub["current"].iloc[-1])
+    # Baseline connects the two EXTREME-POTENTIAL points of the loop:
+    # the lowest-potential vertex and the highest-potential vertex
+    # (matching the standard CV endpoint baseline).
+    i_lo = sub["potential"].idxmin()
+    i_hi = sub["potential"].idxmax()
+    x1 = float(sub["potential"].iloc[i_lo])
+    y1 = float(sub["current"].iloc[i_lo])
+    x2 = float(sub["potential"].iloc[i_hi])
+    y2 = float(sub["current"].iloc[i_hi])
 
     with st.expander(f"Scan {s}", expanded=(s == scans[0])):
         st.markdown(f"#### Scan {s}")
