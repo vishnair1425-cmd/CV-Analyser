@@ -3,18 +3,18 @@ Cyclic Voltammetry (CV) Charge Integration App
 ================================================
 Upload an Excel file containing CV data with multiple scans. The app:
   - Plots the combined CV (Potential vs WE(1).Current (A)) coloured by scan.
-  - Shows each scan as a separate interactive plot. The default baseline is
-    horizontal at Y = 0; draw a new baseline freehand with the mouse
-    (press & drag) or drag either endpoint. The area above the baseline is
-    shaded red (positive) and below it blue (negative); baseline, shading, and
-    integrated charges update live in the browser.
-  - Integrates charge separately for the region above the baseline (positive)
-    and below it (negative), per scan.
+  - Shows each scan as a separate interactive plot (Potential X vs Current Y).
+    The default baseline is horizontal at Y = 0; draw a new baseline freehand
+    with the mouse (press & drag) or drag either endpoint. Area above the
+    baseline is shaded red (positive), below it blue (negative).
+  - Integrates charge as  Q = ∫ I dt  over the TIME column, giving coulombs
+    directly (matches a "Current over Time" integration in CV software).
+    Charge is split into positive (above baseline) and negative (below) parts.
   - Builds peak current / peak voltage tables for the positive and negative
     regions of the combined plot.
 
-Expected columns (exact):  Potential , WE(1).Current (A) , scan
-(Manual column overrides are available in the sidebar if needed.)
+Expected columns:  Potential , WE(1).Current (A) , scan , and a time column
+(Manual column overrides are available in the sidebar if names differ.)
 
 Run with:  streamlit run cv_app.py
 """
@@ -63,24 +63,25 @@ def list_sheets(file_bytes):
     return pd.ExcelFile(io.BytesIO(file_bytes)).sheet_names
 
 
-def trapz_signed(potential, current, baseline):
-    """Integrate (current - baseline) dV; split into positive / negative areas.
-    Zero-crossings within a segment are split at the crossing for accuracy.
+def trapz_signed(xvar, current, baseline):
+    """Integrate (current - baseline) over xvar (TIME, in seconds); split into
+    positive / negative areas. Zero-crossings within a segment are split at the
+    crossing for accuracy. With xvar = time, the result is charge in coulombs.
     Mirrors the in-browser JS implementation exactly."""
-    P = np.asarray(potential, dtype=float)
+    X = np.asarray(xvar, dtype=float)
     diff = np.asarray(current, dtype=float) - np.asarray(baseline, dtype=float)
     pos = neg = 0.0
-    for i in range(len(P) - 1):
-        dV = P[i + 1] - P[i]
+    for i in range(len(X) - 1):
+        dt = X[i + 1] - X[i]
         y0, y1 = diff[i], diff[i + 1]
         if y0 >= 0 and y1 >= 0:
-            pos += 0.5 * (y0 + y1) * dV
+            pos += 0.5 * (y0 + y1) * dt
         elif y0 <= 0 and y1 <= 0:
-            neg += 0.5 * (y0 + y1) * dV
+            neg += 0.5 * (y0 + y1) * dt
         else:
             t = y0 / (y0 - y1) if y1 != y0 else 0.5
-            a1 = 0.5 * y0 * dV * t
-            a2 = 0.5 * y1 * dV * (1 - t)
+            a1 = 0.5 * y0 * dt * t
+            a2 = 0.5 * y1 * dt * (1 - t)
             for a in (a1, a2):
                 if a >= 0:
                     pos += a
@@ -93,14 +94,14 @@ def trapz_signed(potential, current, baseline):
 # Draw/drag-baseline component (HTML + Plotly.js)
 # ----------------------------------------------------------------------------
 
-def draggable_cv_component(potential, current, color, x_title, y_title,
+def draggable_cv_component(potential, current, time, color, x_title, y_title,
                            default_x1, default_y1, default_x2, default_y2,
-                           scan_rate, key_height=440):
-    """Render a Plotly chart whose linear baseline can be drawn freehand with
-    the mouse (press & drag) or adjusted by dragging either endpoint. The area
-    above the baseline is shaded red, below it blue. Integration is live."""
+                           key_height=440):
+    """Render a Plotly chart (Potential X vs Current Y) with a draw/drag linear
+    baseline. Charge is integrated over TIME -> coulombs, live in the browser."""
     P = [float(v) for v in potential]
     I = [float(v) for v in current]
+    T = [float(v) for v in time]
 
     # Fixed axis ranges from the data extent (with padding) so the plot is
     # scaled correctly and dragging an anchor never distorts the view.
@@ -114,11 +115,10 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
     y_range = [imin - iy_pad, imax + iy_pad]
 
     payload = json.dumps({
-        "P": P, "I": I, "color": color,
+        "P": P, "I": I, "T": T, "color": color,
         "xTitle": x_title, "yTitle": y_title,
         "x1": default_x1, "y1": default_y1,
         "x2": default_x2, "y2": default_y2,
-        "scanRate": scan_rate,
         "xRange": x_range, "yRange": y_range,
     })
 
@@ -132,10 +132,10 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <script>
 const D = __PAYLOAD__;
-const P = D.P, I = D.I;
+const P = D.P, I = D.I, T = D.T;
 let A1 = {x: D.x1, y: D.y1};
 let A2 = {x: D.x2, y: D.y2};
-const unit = D.scanRate > 0 ? "C" : "A\u00B7V";
+const unit = "C";
 
 function baselineAt(x){
   if (A2.x === A1.x) return A1.y;
@@ -144,20 +144,22 @@ function baselineAt(x){
   return m*x + b;
 }
 function integrate(){
+  // Charge = integral of (current - baseline) over TIME -> coulombs.
+  // The baseline is drawn on the Potential-Current plot, so it is evaluated
+  // at each point's potential, but the integration step is dt (seconds).
   let pos=0, neg=0;
   for(let i=0;i<P.length-1;i++){
-    const dV = P[i+1]-P[i];
+    const dt = T[i+1]-T[i];
     const y0 = I[i]   - baselineAt(P[i]);
     const y1 = I[i+1] - baselineAt(P[i+1]);
-    if(y0>=0 && y1>=0){ pos += 0.5*(y0+y1)*dV; }
-    else if(y0<=0 && y1<=0){ neg += 0.5*(y0+y1)*dV; }
+    if(y0>=0 && y1>=0){ pos += 0.5*(y0+y1)*dt; }
+    else if(y0<=0 && y1<=0){ neg += 0.5*(y0+y1)*dt; }
     else {
       const t = (y1!==y0) ? y0/(y0-y1) : 0.5;
-      const a1 = 0.5*y0*dV*t, a2 = 0.5*y1*dV*(1-t);
+      const a1 = 0.5*y0*dt*t, a2 = 0.5*y1*dt*(1-t);
       [a1,a2].forEach(a => { if(a>=0) pos+=a; else neg+=a; });
     }
   }
-  if(D.scanRate>0){ pos/=D.scanRate; neg/=D.scanRate; }
   return {pos, neg};
 }
 function baselineYs(){ return P.map(baselineAt); }
@@ -326,7 +328,7 @@ refresh();
 st.title("Cyclic Voltammetry — Charge Integration")
 st.caption(
     "Upload CV data, draw or drag the baseline on each scan, and read off "
-    "the positive / negative integrated charge live."
+    "the positive / negative integrated charge (coulombs) live."
 )
 
 with st.sidebar:
@@ -335,7 +337,7 @@ with st.sidebar:
 
 if uploaded is None:
     st.info("⬅️ Upload an Excel file to begin. Expected columns: "
-            "`Potential`, `WE(1).Current (A)`, `scan`.")
+            "`Potential`, `WE(1).Current (A)`, `scan`, and a time column.")
     st.stop()
 
 file_bytes = uploaded.getvalue()
@@ -352,22 +354,22 @@ with st.sidebar:
     pot_guess = guess_column(["Potential"], cols) or cols[0]
     cur_guess = guess_column(["WE(1).Current (A)", "Current (A)"], cols) or cols[0]
     scan_guess = guess_column(["scan", "cycle"], cols) or cols[0]
+    time_guess = guess_column(["Corrected time", "Time (s)", "Time", "t (s)", "time"], cols) or cols[0]
 
     pot_col = st.selectbox("Potential (X)", cols, index=cols.index(pot_guess))
     cur_col = st.selectbox("Current (Y)", cols, index=cols.index(cur_guess))
     scan_col = st.selectbox("Scan / Cycle", cols, index=cols.index(scan_guess))
-
-    st.header("3 · Optional")
-    scan_rate = st.number_input(
-        "Scan rate (V/s) — for charge in Coulombs",
-        min_value=0.0, value=0.0, step=0.001, format="%.4f",
-        help="If > 0, integrated area (A·V) is divided by scan rate to give Coulombs.",
+    time_col = st.selectbox(
+        "Time (s) — for charge integration", cols,
+        index=cols.index(time_guess),
+        help="Charge is integrated as ∫ I dt over this time column, giving "
+             "coulombs directly (matches a 'Current over Time' integration).",
     )
 
 # Clean / validate
-work = df[[scan_col, pot_col, cur_col]].copy()
-work.columns = ["scan", "potential", "current"]
-work = work.dropna(subset=["potential", "current"])
+work = df[[scan_col, pot_col, cur_col, time_col]].copy()
+work.columns = ["scan", "potential", "current", "time"]
+work = work.dropna(subset=["potential", "current", "time"])
 work["scan"] = work["scan"].astype(str)
 
 scans = list(work["scan"].unique())
@@ -377,11 +379,7 @@ except (ValueError, TypeError):
     scans = sorted(scans)
 
 color_map = {s: PALETTE[i % len(PALETTE)] for i, s in enumerate(scans)}
-unit_label = "C" if scan_rate > 0 else "A·V"
-
-
-def to_charge(area):
-    return area / scan_rate if scan_rate > 0 else area
+unit_label = "C"
 
 
 # ----------------------------------------------------------------------------
@@ -442,6 +440,7 @@ st.subheader("Per-scan integration — draw or drag the baseline")
 st.caption(
     "Default baseline is horizontal at Y = 0 (the current axis). Area above the "
     "baseline is shaded **red** (positive), below it **blue** (negative). "
+    "Charge is integrated as ∫ I dt over time (coulombs). "
     "Click **Draw baseline** then press-and-drag on the plot to draw a "
     "new baseline with your mouse, or drag either red endpoint to fine-tune. "
     "**Reset** returns to Y = 0. Positive / negative charge update live underneath."
@@ -465,26 +464,28 @@ for s in scans:
         draggable_cv_component(
             potential=sub["potential"].tolist(),
             current=sub["current"].tolist(),
+            time=sub["time"].tolist(),
             color=color_map[s],
             x_title=pot_col, y_title=cur_col,
             default_x1=x1, default_y1=y1, default_x2=x2, default_y2=y2,
-            scan_rate=scan_rate, key_height=440,
+            key_height=440,
         )
 
-    # default-baseline charge for the summary table (server-side, matches JS)
+    # default-baseline charge for the summary table (server-side, matches JS).
+    # Baseline evaluated vs potential; integration is over TIME -> coulombs.
     if x2 != x1:
         m = (y2 - y1) / (x2 - x1)
         b = y1 - m * x1
         bl = m * sub["potential"].values + b
     else:
         bl = np.full(len(sub), y1)
-    pos_area, neg_area = trapz_signed(sub["potential"].values,
+    pos_area, neg_area = trapz_signed(sub["time"].values,
                                       sub["current"].values, bl)
     summary_rows.append({
         "Scan": s,
-        f"Positive charge ({unit_label})": to_charge(pos_area),
-        f"Negative charge ({unit_label})": to_charge(neg_area),
-        f"Net charge ({unit_label})": to_charge(pos_area + neg_area),
+        f"Positive charge ({unit_label})": pos_area,
+        f"Negative charge ({unit_label})": neg_area,
+        f"Net charge ({unit_label})": pos_area + neg_area,
     })
 
 # ----------------------------------------------------------------------------
@@ -494,8 +495,9 @@ for s in scans:
 if summary_rows:
     st.subheader("Charge summary — all scans (default baseline)")
     st.caption(
-        "Computed with the default Y = 0 baseline. The live values above each "
-        "plot reflect any drawing/dragging you do in-browser."
+        "Charge = ∫ I dt over the time column, with the default Y = 0 baseline "
+        "(coulombs). The live values above each plot reflect any "
+        "drawing/dragging you do in-browser."
     )
     summary = pd.DataFrame(summary_rows)
     st.dataframe(summary, use_container_width=True, hide_index=True)
