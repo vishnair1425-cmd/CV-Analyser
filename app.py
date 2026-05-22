@@ -5,7 +5,8 @@ Upload an Excel file containing CV data with multiple scans. The app:
   - Plots the combined CV (Potential vs WE(1).Current (A)) coloured by scan.
   - Shows each scan as a separate interactive plot. The default baseline is
     horizontal at Y = 0; draw a new baseline freehand with the mouse
-    (press & drag) or drag either endpoint. Baseline, shaded areas, and
+    (press & drag) or drag either endpoint. The area above the baseline is
+    shaded red (positive) and below it blue (negative); baseline, shading, and
     integrated charges update live in the browser.
   - Integrates charge separately for the region above the baseline (positive)
     and below it (negative), per scan.
@@ -96,8 +97,8 @@ def draggable_cv_component(potential, current, color, x_title, y_title,
                            default_x1, default_y1, default_x2, default_y2,
                            scan_rate, key_height=440):
     """Render a Plotly chart whose linear baseline can be drawn freehand with
-    the mouse (press & drag) or adjusted by dragging either endpoint.
-    Integration happens live in the browser."""
+    the mouse (press & drag) or adjusted by dragging either endpoint. The area
+    above the baseline is shaded red, below it blue. Integration is live."""
     P = [float(v) for v in potential]
     I = [float(v) for v in current]
 
@@ -164,20 +165,31 @@ function fmt(v){ return v.toExponential(4); }
 
 function buildData(){
   const ys = baselineYs();
+  // Clamp the curve to the baseline to shade each region separately:
+  //  - posCurve fills only where current is ABOVE the baseline
+  //  - negCurve fills only where current is BELOW the baseline
+  const posCurve = I.map((v,i) => Math.max(v, ys[i]));
+  const negCurve = I.map((v,i) => Math.min(v, ys[i]));
   const curve = {x:P, y:I, mode:"lines", name:"CV",
     line:{color:D.color, width:2},
     hovertemplate:"E=%{x:.4f} V<br>I=%{y:.3e} A<extra></extra>"};
   const base = {x:P, y:ys, mode:"lines", name:"Baseline",
     line:{color:"black", width:2, dash:"dash"}, hoverinfo:"skip"};
-  const fill = {x: P.concat(P.slice().reverse()),
-    y: I.concat(ys.slice().reverse()),
-    fill:"toself", fillcolor:"rgba(31,119,180,0.12)",
-    line:{color:"rgba(0,0,0,0)"}, hoverinfo:"skip", showlegend:false};
+  const fillPos = {x: P.concat(P.slice().reverse()),
+    y: posCurve.concat(ys.slice().reverse()),
+    fill:"toself", fillcolor:"rgba(214,39,40,0.20)",   // red = positive area
+    line:{color:"rgba(0,0,0,0)"}, hoverinfo:"skip",
+    name:"Positive area"};
+  const fillNeg = {x: P.concat(P.slice().reverse()),
+    y: negCurve.concat(ys.slice().reverse()),
+    fill:"toself", fillcolor:"rgba(31,119,180,0.20)",  // blue = negative area
+    line:{color:"rgba(0,0,0,0)"}, hoverinfo:"skip",
+    name:"Negative area"};
   const anchors = {x:[A1.x, A2.x], y:[A1.y, A2.y], mode:"markers",
     name:"Drag me", marker:{color:"red", size:14, symbol:"circle",
       line:{color:"white", width:2}},
     hovertemplate:"drag<br>E=%{x:.4f} V<br>I=%{y:.3e} A<extra></extra>"};
-  return [fill, curve, base, anchors];
+  return [fillPos, fillNeg, curve, base, anchors];
 }
 
 const layout = {
@@ -204,8 +216,8 @@ function refresh(){
   Plotly.react(gd, buildData(), gd.layout || layout);
   const r = integrate();
   document.getElementById("out").innerHTML =
-    '<span class="pos">Positive charge: '+fmt(r.pos)+' '+unit+'</span>'+
-    '<span class="neg">Negative charge: '+fmt(r.neg)+' '+unit+'</span>'+
+    '<span class="pos">\u25A0 Positive charge: '+fmt(r.pos)+' '+unit+'</span>'+
+    '<span class="neg">\u25A0 Negative charge: '+fmt(r.neg)+' '+unit+'</span>'+
     '<span class="net">Net: '+fmt(r.pos+r.neg)+' '+unit+
     '  &middot;  |Total|: '+fmt(Math.abs(r.pos)+Math.abs(r.neg))+' '+unit+'</span>';
 }
@@ -297,8 +309,8 @@ refresh();
   #toolbar .hint{font-size:12px; color:#888;}
   #out{font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin-top:10px;
        display:flex; gap:18px; flex-wrap:wrap; font-size:15px;}
-  #out .pos{color:#1f77b4; font-weight:600;}
-  #out .neg{color:#d62728; font-weight:600;}
+  #out .pos{color:#d62728; font-weight:600;}
+  #out .neg{color:#1f77b4; font-weight:600;}
   #out .net{color:#444;}
 </style>
 <div id="out"></div>
@@ -428,7 +440,8 @@ with c2:
 
 st.subheader("Per-scan integration — draw or drag the baseline")
 st.caption(
-    "Default baseline is horizontal at Y = 0 (the current axis). "
+    "Default baseline is horizontal at Y = 0 (the current axis). Area above the "
+    "baseline is shaded **red** (positive), below it **blue** (negative). "
     "Click **Draw baseline** then press-and-drag on the plot to draw a "
     "new baseline with your mouse, or drag either red endpoint to fine-tune. "
     "**Reset** returns to Y = 0. Positive / negative charge update live underneath."
