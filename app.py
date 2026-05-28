@@ -11,7 +11,7 @@ Upload an Excel file containing CV data with multiple scans. The app:
     directly (matches a "Current over Time" integration in CV software).
     Charge is split into positive (above baseline) and negative (below) parts.
   - Builds peak current / peak voltage tables for the positive and negative
-    regions of the combined plot.
+    regions, the Neg/Pos charge ratio, ΔEp, and trend-vs-scan plots.
 
 Expected columns:  Potential , WE(1).Current (A) , scan , and a time column
 (Manual column overrides are available in the sidebar if names differ.)
@@ -409,20 +409,32 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("Peak current / voltage per scan")
 st.caption(
     "Positive region = maximum (anodic) current; Negative region = minimum "
-    "(cathodic) current. Peak Voltage is the potential at that peak current."
+    "(cathodic) current. Peak Voltage is the potential at that peak current. "
+    "ΔEp = anodic peak voltage − cathodic peak voltage."
 )
 
+peak_metrics = {}   # scan -> dict of anodic/cathodic peak voltage & current, ΔEp
 pos_rows, neg_rows = [], []
 for s in scans:
     sub = work[work["scan"] == s]
     if sub.empty:
         continue
-    i_max = sub["current"].idxmax()
-    i_min = sub["current"].idxmin()
-    pos_rows.append({"Scan": s, "Peak Current (A)": sub.loc[i_max, "current"],
-                     "Peak Voltage (V)": sub.loc[i_max, "potential"]})
-    neg_rows.append({"Scan": s, "Peak Current (A)": sub.loc[i_min, "current"],
-                     "Peak Voltage (V)": sub.loc[i_min, "potential"]})
+    i_max = sub["current"].idxmax()      # anodic (positive) peak
+    i_min = sub["current"].idxmin()      # cathodic (negative) peak
+    v_anodic = float(sub.loc[i_max, "potential"])
+    i_anodic = float(sub.loc[i_max, "current"])
+    v_cathodic = float(sub.loc[i_min, "potential"])
+    i_cathodic = float(sub.loc[i_min, "current"])
+    dEp = v_anodic - v_cathodic
+    peak_metrics[s] = {
+        "v_anodic": v_anodic, "i_anodic": i_anodic,
+        "v_cathodic": v_cathodic, "i_cathodic": i_cathodic,
+        "dEp": dEp,
+    }
+    pos_rows.append({"Scan": s, "Peak Current (A)": i_anodic,
+                     "Peak Voltage (V)": v_anodic})
+    neg_rows.append({"Scan": s, "Peak Current (A)": i_cathodic,
+                     "Peak Voltage (V)": v_cathodic})
 
 c1, c2 = st.columns(2)
 with c1:
@@ -481,11 +493,19 @@ for s in scans:
         bl = np.full(len(sub), y1)
     pos_area, neg_area = trapz_signed(sub["time"].values,
                                       sub["current"].values, bl)
+    pm = peak_metrics.get(s, {})
+    ratio = (neg_area / pos_area) if pos_area != 0 else float("nan")
     summary_rows.append({
         "Scan": s,
+        "Anodic peak V (V)": pm.get("v_anodic", float("nan")),
+        "Cathodic peak V (V)": pm.get("v_cathodic", float("nan")),
+        "ΔEp (V)": pm.get("dEp", float("nan")),
+        "Anodic peak I (A)": pm.get("i_anodic", float("nan")),
+        "Cathodic peak I (A)": pm.get("i_cathodic", float("nan")),
         f"Positive charge ({unit_label})": pos_area,
         f"Negative charge ({unit_label})": neg_area,
         f"Net charge ({unit_label})": pos_area + neg_area,
+        "Neg/Pos charge ratio": ratio,
     })
 
 # ----------------------------------------------------------------------------
@@ -506,3 +526,55 @@ if summary_rows:
         summary.to_csv(index=False).encode("utf-8"),
         file_name="cv_charge_summary.csv", mime="text/csv",
     )
+
+    # ------------------------------------------------------------------------
+    # Trend plots vs scan number
+    # ------------------------------------------------------------------------
+    st.subheader("Trends vs scan number")
+    st.caption(
+        "Each metric plotted against scan number. Charges and the Neg/Pos ratio "
+        "use the default Y = 0 baseline integrated over time."
+    )
+
+    # numeric x-axis: parse scan labels to floats, else fall back to 1..N
+    try:
+        x_scan = [float(s) for s in summary["Scan"]]
+    except (ValueError, TypeError):
+        x_scan = list(range(1, len(summary) + 1))
+
+    pos_q_col = f"Positive charge ({unit_label})"
+    neg_q_col = f"Negative charge ({unit_label})"
+
+    def trend_chart(y, y_title, color):
+        f = go.Figure()
+        f.add_trace(go.Scatter(
+            x=x_scan, y=list(y), mode="lines+markers",
+            line=dict(color=color, width=2), marker=dict(size=7, color=color),
+            hovertemplate="Scan %{x}<br>%{y:.4g}<extra></extra>",
+        ))
+        f.update_layout(
+            xaxis_title="Scan", yaxis_title=y_title, height=320,
+            margin=dict(l=70, r=20, t=30, b=45), template="plotly_white",
+            showlegend=False,
+        )
+        return f
+
+    # (a)-(h) in the requested order, two per row
+    trends = [
+        ("a) Positive (anodic) peak voltage vs scan", summary["Anodic peak V (V)"],   "Anodic peak V (V)",   "#d62728"),
+        ("b) Negative (cathodic) peak voltage vs scan", summary["Cathodic peak V (V)"], "Cathodic peak V (V)", "#1f77b4"),
+        ("c) Positive (anodic) peak current vs scan", summary["Anodic peak I (A)"],   "Anodic peak I (A)",   "#d62728"),
+        ("d) Negative (cathodic) peak current vs scan", summary["Cathodic peak I (A)"], "Cathodic peak I (A)", "#1f77b4"),
+        ("e) Peak voltage difference ΔEp vs scan", summary["ΔEp (V)"],                "ΔEp (V)",             "#2ca02c"),
+        ("f) Positive charge vs scan", summary[pos_q_col],                            pos_q_col,             "#d62728"),
+        ("g) Negative charge vs scan", summary[neg_q_col],                            neg_q_col,             "#1f77b4"),
+        ("h) Neg/Pos charge ratio vs scan", summary["Neg/Pos charge ratio"],          "Neg/Pos charge ratio","#9467bd"),
+    ]
+
+    for i in range(0, len(trends), 2):
+        cols = st.columns(2)
+        for col, (title, ydata, ytitle, color) in zip(cols, trends[i:i + 2]):
+            with col:
+                st.markdown(f"**{title}**")
+                st.plotly_chart(trend_chart(ydata, ytitle, color),
+                                use_container_width=True)
