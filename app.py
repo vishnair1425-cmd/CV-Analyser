@@ -568,7 +568,7 @@ if summary_rows:
         ("e) Peak voltage difference ΔEp vs scan", summary["ΔEp (V)"],                "ΔEp (V)",             "#2ca02c"),
         ("f) Positive charge vs scan", summary[pos_q_col],                            pos_q_col,             "#d62728"),
         ("g) Negative charge vs scan", summary[neg_q_col],                            neg_q_col,             "#1f77b4"),
-        ("h) Neg/Pos charge ratio vs scan", summary["Neg/Pos charge ratio"],          "Neg/Pos charge ratio","#9467bd"),
+        ("h) |Neg/Pos| charge ratio vs scan", summary["Neg/Pos charge ratio"].abs(), "|Neg/Pos| charge ratio","#9467bd"),
     ]
 
     for i in range(0, len(trends), 2):
